@@ -1,0 +1,6 @@
+{
+  "name": "VARI-Net Decision Intelligence",
+  "description": "AI-Powered Decision Intelligence Platform for large-scale pilgrimage and crowd management",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
