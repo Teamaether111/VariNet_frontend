@@ -6,6 +6,10 @@ Stores: users (with hashed passwords), incidents, recommendations.
 
 import sqlite3
 from contextlib import contextmanager
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "varinet.db"
 
 DB_PATH = "varinet.db"
 
