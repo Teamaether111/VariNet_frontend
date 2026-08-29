@@ -109,13 +109,42 @@ export interface AIRecommendation {
 export interface Facility {
   id: string;
   name: string;
-  type: 'WATER' | 'MEDICAL' | 'TOILET' | 'POLICE_BOOTH' | 'SHELTER' | 'PARKING' | 'PRASAD_CAMP' | 'TEMPLE';
+
+  type:
+    | 'WATER'
+    | 'MEDICAL'
+    | 'TOILET'
+    | 'POLICE_BOOTH'
+    | 'SHELTER'
+    | 'PARKING'
+    | 'PRASAD_CAMP'
+    | 'TEMPLE';
+
   zoneId: string;
-  coordinates: { x: number; y: number };
-  status: 'OPEN' | 'BUSY' | 'FULL' | 'MAINTENANCE';
-  capacityPct: number; // 0-100%
+
+  coordinates: {
+    x: number;
+    y: number;
+  };
+
+  latitude?: number | null;
+  longitude?: number | null;
+
+  status:
+    | 'OPEN'
+    | 'BUSY'
+    | 'FULL'
+    | 'MAINTENANCE';
+
+  capacity?: number | null;
+  capacityPct: number;
+  isTemporary?: boolean;
+
   description: string;
-  distanceMeters?: number;
+  distanceMeters?: number | null;
+
+  source?: string;
+  verifiedAt?: string | null;
 }
 
 export interface VolunteerTask {

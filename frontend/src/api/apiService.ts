@@ -1,15 +1,40 @@
 import { Zone, Incident, AIRecommendation, Facility, VolunteerTask } from '../types';
-import { INITIAL_ZONES, INITIAL_INCIDENTS, INITIAL_FACILITIES, INITIAL_RECOMMENDATIONS } from '../data/initialData';
+import { INITIAL_ZONES, INITIAL_INCIDENTS, INITIAL_RECOMMENDATIONS } from '../data/initialData';
 import { generateUniqueId } from '../utils/idGenerator';
 
 /**
  * Service Layer adhering to the API contract.
  * Ready for drop-in FastAPI backend integration without changing frontend UI.
  */
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  'http://127.0.0.1:8000';
+
+  async function parseApiResponse<T>(
+  response: Response
+): Promise<T> {
+  if (!response.ok) {
+    let message = `API request failed: ${response.status}`;
+
+    try {
+      const errorBody = await response.json();
+
+      if (errorBody?.detail) {
+        message = errorBody.detail;
+      }
+    } catch {
+      // Keep the default error message.
+    }
+
+    throw new Error(message);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 class ApiService {
   private zones: Zone[] = [...INITIAL_ZONES];
   private incidents: Incident[] = [...INITIAL_INCIDENTS];
-  private facilities: Facility[] = [...INITIAL_FACILITIES];
   private recommendations: AIRecommendation[] = [...INITIAL_RECOMMENDATIONS];
   private tasks: VolunteerTask[] = [
     {
@@ -49,10 +74,38 @@ class ApiService {
   }
 
   // GET /api/facilities
-  async getFacilities(): Promise<Facility[]> {
-    await this.delay(80);
-    return JSON.parse(JSON.stringify(this.facilities));
+  async getFacilities(filters?: {
+  zoneId?: string;
+  facilityType?: Facility['type'];
+  status?: Facility['status'];
+}): Promise<Facility[]> {
+  const query = new URLSearchParams();
+
+  if (filters?.zoneId) {
+    query.set('zone_id', filters.zoneId);
   }
+
+  if (filters?.facilityType) {
+    query.set(
+      'facility_type',
+      filters.facilityType
+    );
+  }
+
+  if (filters?.status) {
+    query.set('status', filters.status);
+  }
+
+  const queryString = query.toString();
+
+  const url = queryString
+    ? `${API_BASE_URL}/api/facilities?${queryString}`
+    : `${API_BASE_URL}/api/facilities`;
+
+  const response = await fetch(url);
+
+  return parseApiResponse<Facility[]>(response);
+}
 
   // GET /api/recommendations/next
   async getNextRecommendation(): Promise<AIRecommendation | null> {

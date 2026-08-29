@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { 
   UserRole, 
   Zone, 
@@ -10,11 +10,11 @@ import {
   VolunteerTask,
   IncidentType
 } from '../types';
+import { apiService } from '../api/apiService';
 import { 
   INITIAL_ZONES, 
   INITIAL_INCIDENTS, 
   INITIAL_RECOMMENDATIONS, 
-  INITIAL_FACILITIES, 
   INITIAL_ROUTES, 
   INITIAL_TEMPLE_STATUS 
 } from '../data/initialData';
@@ -103,7 +103,7 @@ export const OperationsProvider: React.FC<{ children: ReactNode }> = ({ children
   const [zones, setZones] = useState<Zone[]>(INITIAL_ZONES);
   const [incidents, setIncidents] = useState<Incident[]>(INITIAL_INCIDENTS);
   const [recommendations, setRecommendations] = useState<AIRecommendation[]>(INITIAL_RECOMMENDATIONS);
-  const [facilities] = useState<Facility[]>(INITIAL_FACILITIES);
+  const [facilities, setFacilities] = useState<Facility[]>([]);
   const [routes, setRoutes] = useState<RouteOption[]>(INITIAL_ROUTES);
   const [templeStatus] = useState<TempleQueueStatus>(INITIAL_TEMPLE_STATUS);
   const [volunteerTasks, setVolunteerTasks] = useState<VolunteerTask[]>([
@@ -140,6 +140,68 @@ export const OperationsProvider: React.FC<{ children: ReactNode }> = ({ children
       roleTarget: 'ALL',
     },
   ]);
+
+  useEffect(() => {
+  let cancelled = false;
+
+  const loadFacilities = async () => {
+    try {
+      const facilityData =
+        await apiService.getFacilities();
+
+      if (cancelled) {
+        return;
+      }
+
+      setFacilities(facilityData);
+
+      setNotifications(previous => [
+        {
+          id: generateUniqueId('notif'),
+          title: 'Facilities synchronized',
+          message:
+            `${facilityData.length} facilities loaded from VARI-Net.`,
+          type: 'SUCCESS',
+          timestamp: 'Just now',
+          roleTarget: 'ALL',
+        },
+        ...previous,
+      ]);
+    } catch (error) {
+      if (cancelled) {
+        return;
+      }
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to load facilities';
+
+      console.error(
+        'Facility synchronization failed:',
+        error
+      );
+
+      setNotifications(previous => [
+        {
+          id: generateUniqueId('notif'),
+          title: 'Facility synchronization failed',
+          message,
+          type: 'WARNING',
+          timestamp: 'Just now',
+          roleTarget: 'ALL',
+        },
+        ...previous,
+      ]);
+    }
+  };
+
+  loadFacilities();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
 
   // Selected Zone lookup
   const selectedZone = zones.find(z => z.id === selectedZoneId) || zones[2] || zones[0];
