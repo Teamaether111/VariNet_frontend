@@ -1,201 +1,232 @@
 """
 VARI-Net FastAPI Backend
-Serves live crowd risk predictions to the React frontend, matching the
-exact API contract defined in src/api/apiService.ts and src/types/index.ts
+Serves live crowd-risk predictions and operational APIs to the React frontend.
 """
 
-import random
 import datetime
-from typing import Optional, List
-from incident_repository import (
+import random
+from pathlib import Path
+from typing import List, Optional
+
+import joblib
+import pandas as pd
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from auth import get_current_user, require_roles, router as auth_router
+from database import get_db, init_db
+from repositories.facility_repository import (
+    get_facility_by_id,
+    list_facilities,
+)
+from repositories.incident_repository import (
     create_incident as db_create_incident,
     get_incident_by_id as db_get_incident,
     list_incidents as db_list_incidents,
     update_incident as db_update_incident,
 )
 
-import joblib
-import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from database import init_db, get_db
-from auth import (
-    router as auth_router,
-    get_current_user,
-    require_roles,
-)
-from facility_repository import (
-    get_facility_by_id,
-    list_facilities,
-)
-from pathlib import Path
-
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
 
-# ---------------------------------------------------------------------------
-# App setup
-# ---------------------------------------------------------------------------
 app = FastAPI(title="VARI-Net Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to your deployed frontend URL for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- THIS LINE WAS MISSING: mount the auth router onto the app ---
+# Only auth is a separate router.
+# Do NOT include incidents_router or facilities_router here.
 app.include_router(auth_router)
 
-# --- Also make sure the users table exists (you have init_db in database.py) ---
 init_db()
 
 # ---------------------------------------------------------------------------
-# Load trained model + encoders (place your downloaded .pkl files in ./models)
+# Load trained ML model and encoders
 # ---------------------------------------------------------------------------
-MODEL_DIR = "models"
 
-rf_model = joblib.load(f"{MODEL_DIR}/crowd_density_model.pkl")
-zone_encoder = joblib.load(f"{MODEL_DIR}/zone_encoder.pkl")
-location_encoder = joblib.load(f"{MODEL_DIR}/location_encoder.pkl")
-route_encoder = joblib.load(f"{MODEL_DIR}/route_encoder.pkl")
-timeslot_encoder = joblib.load(f"{MODEL_DIR}/timeslot_encoder.pkl")
-peakday_encoder = joblib.load(f"{MODEL_DIR}/peakday_encoder.pkl")
+rf_model = joblib.load(MODEL_DIR / "crowd_density_model.pkl")
+zone_encoder = joblib.load(MODEL_DIR / "zone_encoder.pkl")
+location_encoder = joblib.load(MODEL_DIR / "location_encoder.pkl")
+route_encoder = joblib.load(MODEL_DIR / "route_encoder.pkl")
+timeslot_encoder = joblib.load(MODEL_DIR / "timeslot_encoder.pkl")
+peakday_encoder = joblib.load(MODEL_DIR / "peakday_encoder.pkl")
 
-# ---------------------------------------------------------------------------
-# Sector -> trained-zone mapping
-# Frontend has 5 named sectors; model was trained on 30 zones (Z001-Z030).
-# Each sector is mapped to one representative trained zone/location/route.
-# Edit these mappings any time without touching the frontend.
-# ---------------------------------------------------------------------------
 SECTOR_MAP = {
-    "sector-a": {"code": "Sector A", "name": "Chandrabhaga Holy Ghats",
-                 "zone_id": "Z009", "location": "Dehu", "route_type": "Main",
-                 "maxSafeCapacity": 85000},
-    "sector-b": {"code": "Sector B", "name": "Vitthal Temple Quad & Mahadwar",
-                 "zone_id": "Z003", "location": "Alandi", "route_type": "Main",
-                 "maxSafeCapacity": 50000},
-    "sector-c": {"code": "Sector C", "name": "Palkhi Marg & VIP Junction",
-                 "zone_id": "Z020", "location": "Pune City", "route_type": "Tukaram",
-                 "maxSafeCapacity": 70000},
-    "sector-d": {"code": "Sector D", "name": "Namdev Gate & East Approach",
-                 "zone_id": "Z017", "location": "Pandharpur", "route_type": "Main",
-                 "maxSafeCapacity": 60000},
-    "sector-e": {"code": "Sector E", "name": "Outer Camp & Parking Belt",
-                 "zone_id": "Z013", "location": "Loni Kalbhor", "route_type": "Tukaram",
-                 "maxSafeCapacity": 45000},
+    "sector-a": {
+        "code": "Sector A",
+        "name": "Chandrabhaga Holy Ghats",
+        "zone_id": "Z009",
+        "location": "Dehu",
+        "route_type": "Main",
+        "maxSafeCapacity": 85000,
+    },
+    "sector-b": {
+        "code": "Sector B",
+        "name": "Vitthal Temple Quad & Mahadwar",
+        "zone_id": "Z003",
+        "location": "Alandi",
+        "route_type": "Main",
+        "maxSafeCapacity": 50000,
+    },
+    "sector-c": {
+        "code": "Sector C",
+        "name": "Palkhi Marg & VIP Junction",
+        "zone_id": "Z020",
+        "location": "Pune City",
+        "route_type": "Tukaram",
+        "maxSafeCapacity": 70000,
+    },
+    "sector-d": {
+        "code": "Sector D",
+        "name": "Namdev Gate & East Approach",
+        "zone_id": "Z017",
+        "location": "Pandharpur",
+        "route_type": "Main",
+        "maxSafeCapacity": 60000,
+    },
+    "sector-e": {
+        "code": "Sector E",
+        "name": "Outer Camp & Parking Belt",
+        "zone_id": "Z013",
+        "location": "Loni Kalbhor",
+        "route_type": "Tukaram",
+        "maxSafeCapacity": 45000,
+    },
 }
 
-WEATHER_CONDITIONS = ["Sunny", "Humid & Overcast", "Hot & Dry", "Scattered Showers"]
+WEATHER_CONDITIONS = [
+    "Sunny",
+    "Humid & Overcast",
+    "Hot & Dry",
+    "Scattered Showers",
+]
 
 
 def get_time_slot(hour: int) -> str:
     if 5 <= hour < 12:
         return "Morning"
-    elif 12 <= hour < 17:
+    if 12 <= hour < 17:
         return "Afternoon"
-    elif 17 <= hour < 21:
+    if 17 <= hour < 21:
         return "Evening"
-    else:
-        return "Night"
+    return "Night"
 
 
 def density_to_risk_level(density: float) -> str:
     if density >= 90:
         return "CRITICAL"
-    elif density >= 70:
+    if density >= 70:
         return "HIGH"
-    elif density >= 40:
+    if density >= 40:
         return "MEDIUM"
-    else:
-        return "LOW"
+    return "LOW"
 
 
 def heat_risk_from_temp(temp: float) -> str:
     if temp >= 38:
         return "Extreme"
-    elif temp >= 34:
+    if temp >= 34:
         return "High"
-    elif temp >= 28:
+    if temp >= 28:
         return "Moderate"
     return "Low"
 
 
-def predict_sector_density(zone_id: str, location: str, route_type: str,
-                            hour: int, is_peak_day: str,
-                            temperature_c: float, humidity_percent: float,
-                            precipitation_mm: float, wind_speed_kmh: float) -> float:
-    """Runs the trained Random Forest Regressor for one sector snapshot."""
+def predict_sector_density(
+    zone_id: str,
+    location: str,
+    route_type: str,
+    hour: int,
+    is_peak_day: str,
+    temperature_c: float,
+    humidity_percent: float,
+    precipitation_mm: float,
+    wind_speed_kmh: float,
+) -> float:
     time_slot = get_time_slot(hour)
 
-    input_df = pd.DataFrame([{
-        "hour": hour,
-        "zone_id_enc": zone_encoder.transform([zone_id])[0],
-        "location_enc": location_encoder.transform([location])[0],
-        "route_type_enc": route_encoder.transform([route_type])[0],
-        "time_slot_enc": timeslot_encoder.transform([time_slot])[0],
-        "is_peak_day_enc": peakday_encoder.transform([is_peak_day])[0],
-        "temperature_c": temperature_c,
-        "humidity_percent": humidity_percent,
-        "precipitation_mm": precipitation_mm,
-        "wind_speed_kmh": wind_speed_kmh,
-    }])
+    input_df = pd.DataFrame(
+        [{
+            "hour": hour,
+            "zone_id_enc": zone_encoder.transform([zone_id])[0],
+            "location_enc": location_encoder.transform([location])[0],
+            "route_type_enc": route_encoder.transform([route_type])[0],
+            "time_slot_enc": timeslot_encoder.transform([time_slot])[0],
+            "is_peak_day_enc": peakday_encoder.transform([is_peak_day])[0],
+            "temperature_c": temperature_c,
+            "humidity_percent": humidity_percent,
+            "precipitation_mm": precipitation_mm,
+            "wind_speed_kmh": wind_speed_kmh,
+        }]
+    )
 
-    density = rf_model.predict(input_df)[0]
-    return max(0, min(100, float(density)))
+    density = float(rf_model.predict(input_df)[0])
+    return max(0, min(100, density))
 
 
 def build_zone_payload(sector_id: str) -> dict:
-    """Builds one Zone object matching the frontend's Zone TypeScript type."""
     info = SECTOR_MAP[sector_id]
     now = datetime.datetime.now()
-    hour = now.hour
-    is_peak_day = "Yes" if now.weekday() >= 5 else "No"  # weekend = peak, simple placeholder rule
 
-    # Simulated live weather (swap for a real weather API later if desired)
     temperature_c = round(random.uniform(26, 38), 1)
     humidity_percent = round(random.uniform(45, 90), 1)
     precipitation_mm = round(random.uniform(0, 15), 1)
     wind_speed_kmh = round(random.uniform(5, 30), 1)
 
-    density_0_100 = predict_sector_density(
-        info["zone_id"], info["location"], info["route_type"],
-        hour, is_peak_day, temperature_c, humidity_percent,
-        precipitation_mm, wind_speed_kmh,
+    density = predict_sector_density(
+        info["zone_id"],
+        info["location"],
+        info["route_type"],
+        now.hour,
+        "Yes" if now.weekday() >= 5 else "No",
+        temperature_c,
+        humidity_percent,
+        precipitation_mm,
+        wind_speed_kmh,
     )
-    risk_level = density_to_risk_level(density_0_100)
 
-    # Rescale model's 0-100 density score to frontend's people/sq-meter scale (1.2-5.8)
-    crowd_density_sqm = round(1.2 + (density_0_100 / 100) * (5.8 - 1.2), 2)
-    crowd_count = int(info["maxSafeCapacity"] * (density_0_100 / 100))
-
-    condition = random.choice(WEATHER_CONDITIONS)
-    if precipitation_mm > 5:
-        condition = "Scattered Showers"
+    risk_level = density_to_risk_level(density)
 
     status_map = {
-        "LOW": "NORMAL", "MEDIUM": "MONITORING",
-        "HIGH": "INTERVENTION_REQUIRED", "CRITICAL": "INTERVENTION_REQUIRED",
+        "LOW": "NORMAL",
+        "MEDIUM": "MONITORING",
+        "HIGH": "INTERVENTION_REQUIRED",
+        "CRITICAL": "INTERVENTION_REQUIRED",
     }
+
+    condition = (
+        "Scattered Showers"
+        if precipitation_mm > 5
+        else random.choice(WEATHER_CONDITIONS)
+    )
 
     return {
         "id": sector_id,
         "code": info["code"],
         "name": info["name"],
         "description": f"Live AI-monitored sector near {info['location']}.",
-        "riskScore": round(density_0_100),
+        "riskScore": round(density),
         "riskLevel": risk_level,
         "predictedIssue": (
-            f"Crowd density trending {risk_level.lower()} for the {get_time_slot(hour).lower()} slot."
+            f"Crowd density trending {risk_level.lower()} "
+            f"for the {get_time_slot(now.hour).lower()} slot."
         ),
         "confidence": round(random.uniform(85, 98)),
-        "crowdCount": crowd_count,
-        "crowdDensity": crowd_density_sqm,
+        "crowdCount": int(info["maxSafeCapacity"] * density / 100),
+        "crowdDensity": round(1.2 + density / 100 * 4.6, 2),
         "maxSafeCapacity": info["maxSafeCapacity"],
-        "coordinates": {"x": 50, "y": 50, "width": 200, "height": 150},
+        "coordinates": {
+            "x": 50,
+            "y": 50,
+            "width": 200,
+            "height": 150,
+        },
         "weather": {
             "temp": temperature_c,
             "feelsLike": round(temperature_c + random.uniform(1, 4), 1),
@@ -213,46 +244,6 @@ def build_zone_payload(sector_id: str) -> dict:
             "ambulances": random.randint(2, 6),
         },
     }
-
-
-# ---------------------------------------------------------------------------
-# Endpoints matching apiService.ts contract
-# ---------------------------------------------------------------------------
-
-@app.get("/api/zones/risk")
-def get_zones_risk():
-    return [build_zone_payload(sid) for sid in SECTOR_MAP]
-
-
-@app.get("/api/zones/{sector_id}")
-def get_zone_detail(sector_id: str):
-    if sector_id not in SECTOR_MAP:
-        raise HTTPException(status_code=404, detail="Zone not found")
-    return build_zone_payload(sector_id)
-
-
-# --- Minimal in-memory store for incidents/facilities/recommendations/tasks ---
-# (These don't need ML - they're operational records the app manages)
-
-
-_recommendations: List[dict] = [
-    {
-        "id": "rec-01",
-        "title": "Divert inflow from Sector C to Sector D",
-        "recommendedAction": "Redirect pilgrim flow via alternate route to relieve VIP Junction bottleneck.",
-        "targetZone": "Palkhi Marg & VIP Junction",
-        "targetZoneId": "sector-c",
-        "reason": "Rising crowd density combined with peak-hour inflow.",
-        "expectedImpact": "Reduces density by an estimated 15-20% within 20 minutes.",
-        "confidence": 91,
-        "status": "PENDING_APPROVAL",
-        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
-        "suggestedResources": {"divertRouteName": "Route B - East Bypass", "policeReallocation": 10},
-        "estimatedResolutionMinutes": 20,
-        "preventedIncidentEstimate": "1 potential crowd bottleneck",
-    }
-]
-_tasks: List[dict] = []
 
 
 class IncidentIn(BaseModel):
@@ -274,6 +265,79 @@ class IncidentUpdate(BaseModel):
     status: str
     assignedUnits: Optional[List[str]] = None
 
+
+class RecommendationApprovalIn(BaseModel):
+    approverName: str = "SP / District Collector"
+
+
+class TaskCompletionIn(BaseModel):
+    evidenceNotes: Optional[str] = None
+    evidencePhoto: Optional[str] = None
+
+
+_recommendations: List[dict] = [
+    {
+        "id": "rec-01",
+        "title": "Divert inflow from Sector C to Sector D",
+        "recommendedAction": (
+            "Redirect pilgrim flow via alternate route "
+            "to relieve VIP Junction bottleneck."
+        ),
+        "targetZone": "Palkhi Marg & VIP Junction",
+        "targetZoneId": "sector-c",
+        "reason": "Rising crowd density combined with peak-hour inflow.",
+        "expectedImpact": (
+            "Reduces density by an estimated 15–20% within 20 minutes."
+        ),
+        "confidence": 91,
+        "status": "PENDING_APPROVAL",
+        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+        "suggestedResources": {
+            "divertRouteName": "Route B - East Bypass",
+            "policeReallocation": 10,
+        },
+        "estimatedResolutionMinutes": 20,
+        "preventedIncidentEstimate": "1 potential crowd bottleneck",
+    }
+]
+
+_tasks: List[dict] = []
+
+_routes = [
+    {
+        "id": "route-1a",
+        "name": "Primary Palkhi Spine (Shivaji Chowk)",
+        "status": "ACTIVE",
+        "etaMinutes": 75,
+    },
+    {
+        "id": "route-2",
+        "name": "Bypass 2 (Bhakti Marg Green Corridor)",
+        "status": "RECOMMENDED",
+        "etaMinutes": 35,
+    },
+    {
+        "id": "route-3c",
+        "name": "Ghat Link Promenade (Riverbanks)",
+        "status": "ACTIVE",
+        "etaMinutes": 22,
+    },
+]
+
+
+@app.get("/api/zones/risk")
+def get_zones_risk():
+    return [build_zone_payload(sector_id) for sector_id in SECTOR_MAP]
+
+
+@app.get("/api/zones/{sector_id}")
+def get_zone_detail(sector_id: str):
+    if sector_id not in SECTOR_MAP:
+        raise HTTPException(status_code=404, detail="Zone not found")
+
+    return build_zone_payload(sector_id)
+
+
 @app.get("/api/incidents")
 def get_incidents(
     status: Optional[str] = None,
@@ -287,48 +351,17 @@ def get_incidents(
     )
 
 
-@app.get("/api/incidents/{incident_id}")
-def get_incident(incident_id: str):
-    incident = db_get_incident(incident_id)
-
-    if incident is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Incident not found",
-        )
-
-    return incident
-
-
 @app.post("/api/incidents", status_code=201)
 def create_incident_endpoint(
     incident: IncidentIn,
     current_user: dict = Depends(get_current_user),
 ):
-    valid_priorities = {
-        "LOW",
-        "MEDIUM",
-        "HIGH",
-        "CRITICAL",
-    }
-
-    valid_reported_roles = {
-        "AI_DETECTION",
-        "VOLUNTEER",
-        "PILGRIM",
-        "POLICE",
-    }
+    valid_priorities = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
     if incident.priority.upper() not in valid_priorities:
         raise HTTPException(
             status_code=422,
             detail="Invalid incident priority",
-        )
-
-    if incident.reportedRole.upper() not in valid_reported_roles:
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid reported role",
         )
 
     payload = incident.model_dump()
@@ -352,15 +385,10 @@ def update_incident_endpoint(
     incident_id: str,
     update: IncidentUpdate,
     current_user: dict = Depends(
-        require_roles(
-            "police",
-            "temple-authority",
-        )
+        require_roles("police", "temple-authority")
     ),
 ):
-    existing_incident = db_get_incident(incident_id)
-
-    if existing_incident is None:
+    if db_get_incident(incident_id) is None:
         raise HTTPException(
             status_code=404,
             detail="Incident not found",
@@ -371,28 +399,13 @@ def update_incident_endpoint(
         update.model_dump(exclude_none=True),
     )
 
+
 @app.get("/api/facilities")
 def get_facilities(
-    zone_id: Optional[str] = Query(
-        default=None,
-        description="Filter by zone ID, such as Z011",
-    ),
-    facility_type: Optional[str] = Query(
-        default=None,
-        description=(
-            "Filter using MEDICAL, WATER, TOILET, "
-            "POLICE_BOOTH, SHELTER, PARKING or PRASAD_CAMP"
-        ),
-    ),
-    status: Optional[str] = Query(
-        default=None,
-        description="Filter using OPEN, BUSY, FULL or MAINTENANCE",
-    ),
-    limit: int = Query(
-        default=500,
-        ge=1,
-        le=500,
-    ),
+    zone_id: Optional[str] = Query(default=None),
+    facility_type: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=500),
 ):
     return list_facilities(
         zone_id=zone_id,
@@ -404,9 +417,7 @@ def get_facilities(
 
 @app.get("/api/facilities/{facility_id}")
 def get_facility(facility_id: str):
-    facility = get_facility_by_id(
-        facility_id.strip().upper()
-    )
+    facility = get_facility_by_id(facility_id)
 
     if facility is None:
         raise HTTPException(
@@ -419,95 +430,108 @@ def get_facility(facility_id: str):
 
 @app.get("/api/recommendations/next")
 def get_next_recommendation():
-    active = next((r for r in _recommendations
-                    if r["status"] in ("PENDING_APPROVAL", "APPROVED")), None)
-    return active
+    return next(
+        (
+            recommendation
+            for recommendation in _recommendations
+            if recommendation["status"]
+            in ("PENDING_APPROVAL", "APPROVED")
+        ),
+        None,
+    )
 
 
 @app.post("/api/recommendations/{rec_id}/approve")
 def approve_recommendation(
     rec_id: str,
-    approverName: str = "SP / District Collector",
+    request: RecommendationApprovalIn,
     current_user: dict = Depends(
-        require_roles(
-            "police",
-            "temple-authority",
-        )
+        require_roles("police", "temple-authority")
     ),
 ):
-    rec = next(
+    recommendation = next(
         (
-            recommendation
-            for recommendation in _recommendations
-            if recommendation["id"] == rec_id
+            item
+            for item in _recommendations
+            if item["id"] == rec_id
         ),
         None,
     )
 
-    if not rec:
+    if recommendation is None:
         raise HTTPException(
             status_code=404,
             detail="Recommendation not found",
         )
 
-    rec["status"] = "APPROVED"
-    rec["approvedBy"] = approverName
-    rec["approvedAt"] = datetime.datetime.now().strftime("%H:%M:%S")
+    recommendation["status"] = "APPROVED"
+    recommendation["approvedBy"] = request.approverName
+    recommendation["approvedAt"] = datetime.datetime.now().strftime("%H:%M:%S")
 
-    return rec
+    return recommendation
 
 
 @app.post("/api/tasks/{task_id}/complete")
 def complete_task(
     task_id: str,
-    evidenceNotes: Optional[str] = None,
-    evidencePhoto: Optional[str] = None,
-    current_user: dict = Depends(
-        require_roles("volunteer")
-    ),
+    request: TaskCompletionIn,
+    current_user: dict = Depends(require_roles("volunteer")),
 ):
     task = next(
         (item for item in _tasks if item["id"] == task_id),
         None,
     )
 
-    if not task:
+    if task is None:
         raise HTTPException(
             status_code=404,
             detail="Task not found",
         )
 
     task["status"] = "COMPLETED"
-    task["evidenceNotes"] = evidenceNotes
-    task["evidencePhoto"] = evidencePhoto
+    task["evidenceNotes"] = request.evidenceNotes
+    task["evidencePhoto"] = request.evidencePhoto
 
     return task
 
+
 @app.get("/api/dashboard/summary")
 def dashboard_summary():
-    zones = [build_zone_payload(sid) for sid in SECTOR_MAP]
-    total_crowd = sum(z["crowdCount"] for z in zones)
-    hotspot = max(zones, key=lambda z: z["riskScore"])["code"]
+    zones = [
+        build_zone_payload(sector_id)
+        for sector_id in SECTOR_MAP
+    ]
+
     with get_db() as conn:
         active_incidents = conn.execute(
-            "SELECT COUNT(*) as c FROM incidents WHERE status != 'RESOLVED'"
-        ).fetchone()["c"]
+            """
+            SELECT COUNT(*) AS count
+            FROM incidents
+            WHERE status != 'RESOLVED'
+            """
+        ).fetchone()["count"]
 
     return {
-        "groundCrowdTelemetry": total_crowd,
+        "groundCrowdTelemetry": sum(
+            zone["crowdCount"] for zone in zones
+        ),
         "activeIncidents": active_incidents,
-        "policePatrols": sum(z["activeUnits"]["police"] for z in zones),
-        "activePersonnel": sum(z["activeUnits"]["police"] + z["activeUnits"]["volunteers"] for z in zones),
-        "ambulanceUnits": sum(z["activeUnits"]["ambulances"] for z in zones),
-        "activeHotspot": hotspot,
+        "policePatrols": sum(
+            zone["activeUnits"]["police"] for zone in zones
+        ),
+        "activePersonnel": sum(
+            zone["activeUnits"]["police"]
+            + zone["activeUnits"]["volunteers"]
+            for zone in zones
+        ),
+        "ambulanceUnits": sum(
+            zone["activeUnits"]["ambulances"] for zone in zones
+        ),
+        "activeHotspot": max(
+            zones,
+            key=lambda zone: zone["riskScore"],
+        )["code"],
     }
-
-
-_routes = [
-    {"id": "route-1a", "name": "Primary Palkhi Spine (Shivaji Chowk)", "status": "ACTIVE", "etaMinutes": 75},
-    {"id": "route-2", "name": "Bypass 2 (Bhakti Marg Green Corridor)", "status": "RECOMMENDED", "etaMinutes": 35},
-    {"id": "route-3c", "name": "Ghat Link Promenade (Riverbanks)", "status": "ACTIVE", "etaMinutes": 22},
-]
 
 
 @app.get("/api/routes")
@@ -517,16 +541,31 @@ def get_routes():
 
 @app.post("/api/routes/{route_id}/execute")
 def execute_reroute(route_id: str):
-    route = next((r for r in _routes if r["id"] == route_id), None)
-    if not route:
-        raise HTTPException(status_code=404, detail="Route not found")
+    route = next(
+        (item for item in _routes if item["id"] == route_id),
+        None,
+    )
+
+    if route is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Route not found",
+        )
+
     route["status"] = "ACTIVE"
     return route
 
 
 @app.get("/")
 def root():
-    return {"status": "VARI-Net backend running", "endpoints": [
-        "/api/zones/risk", "/api/incidents", "/api/facilities",
-        "/api/recommendations/next", "/api/auth/login", "/api/auth/register"
-    ]}
+    return {
+        "status": "VARI-Net backend running",
+        "endpoints": [
+            "/api/zones/risk",
+            "/api/incidents",
+            "/api/facilities",
+            "/api/recommendations/next",
+            "/api/auth/login",
+            "/api/auth/register",
+        ],
+    }
