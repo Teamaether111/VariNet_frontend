@@ -3,83 +3,212 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE_PATH = BASE_DIR / "varinet.db"
+DB_PATH = BASE_DIR / "varinet.db"
 
-ZONES_SQL_PATH = BASE_DIR / "seed_sql" / "01_zones.sql"
-FACILITIES_SQL_PATH = BASE_DIR / "seed_sql" / "02_facilities.sql"
+ZONE_SEED_PATH = (
+    BASE_DIR
+    / "database_files"
+    / "seed"
+    / "01_seed_zones.sql"
+)
+
+FACILITY_SEED_PATH = (
+    BASE_DIR
+    / "database_files"
+    / "seed"
+    / "02_seed_facilities.sql"
+)
+
+EXPECTED_ZONE_COUNT = 23
+EXPECTED_FACILITY_COUNT = 432
 
 
-def read_sql_file(file_path: Path) -> str:
-    if not file_path.exists():
-        raise FileNotFoundError(f"SQL file not found: {file_path}")
+def verify_files():
+    required_files = [
+        DB_PATH,
+        ZONE_SEED_PATH,
+        FACILITY_SEED_PATH,
+    ]
 
-    return file_path.read_text(encoding="utf-8-sig")
+    for file_path in required_files:
+        if not file_path.exists():
+            raise FileNotFoundError(
+                f"Required file was not found:\n{file_path}"
+            )
+
+
+def table_exists(connection, table_name):
+    result = connection.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+
+    return result is not None
+
+
+def read_sql(file_path):
+    return file_path.read_text(encoding="utf-8")
+
+
+def make_facility_seed_idempotent(sql):
+    return sql.replace(
+        "INSERT INTO facilities",
+        "INSERT OR IGNORE INTO facilities",
+    )
+
+
+def print_zone_summary(connection):
+    print("\nZone summary:")
+
+    rows = connection.execute(
+        """
+        SELECT zone_scope, COUNT(*) AS total
+        FROM zones
+        GROUP BY zone_scope
+        ORDER BY zone_scope
+        """
+    ).fetchall()
+
+    for zone_scope, total in rows:
+        print(f"- {zone_scope}: {total}")
+
+
+def print_facility_summary(connection):
+    print("\nFacility summary:")
+
+    rows = connection.execute(
+        """
+        SELECT facility_type, COUNT(*) AS total
+        FROM facilities
+        GROUP BY facility_type
+        ORDER BY facility_type
+        """
+    ).fetchall()
+
+    for facility_type, total in rows:
+        print(f"- {facility_type}: {total}")
 
 
 def main():
-    connection = sqlite3.connect(DATABASE_PATH)
-    connection.execute("PRAGMA foreign_keys = ON")
+    verify_files()
 
-    try:
-        print("Step 1: Inserting zones...")
+    print(f"Using database:\n{DB_PATH}")
+    print(f"\nZone seed:\n{ZONE_SEED_PATH}")
+    print(f"\nFacility seed:\n{FACILITY_SEED_PATH}")
 
-        zones_sql = read_sql_file(ZONES_SQL_PATH)
-        connection.executescript(zones_sql)
+    zone_sql = read_sql(ZONE_SEED_PATH)
+    facility_sql = read_sql(FACILITY_SEED_PATH)
+    facility_sql = make_facility_seed_idempotent(
+        facility_sql
+    )
+
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+
+        if not table_exists(connection, "zones"):
+            raise RuntimeError(
+                "The zones table does not exist. "
+                "Complete Stage 7 first."
+            )
+
+        if not table_exists(connection, "facilities"):
+            raise RuntimeError(
+                "The facilities table does not exist. "
+                "Complete Stage 7 first."
+            )
+
+        print("\nInserting missing zones...")
+        connection.executescript(zone_sql)
 
         zone_count = connection.execute(
             "SELECT COUNT(*) FROM zones"
         ).fetchone()[0]
 
-        print(f"Zones currently stored: {zone_count}")
+        print(f"Zones after seeding: {zone_count}")
 
-        if zone_count != 23:
+        if zone_count != EXPECTED_ZONE_COUNT:
+            zone_ids = connection.execute(
+                """
+                SELECT zone_id, code, name, zone_scope
+                FROM zones
+                ORDER BY zone_id
+                """
+            ).fetchall()
+
+            print("\nZones currently available:")
+
+            for row in zone_ids:
+                print(
+                    f"- {row[0]} | {row[1]} | "
+                    f"{row[2]} | {row[3]}"
+                )
+
             raise ValueError(
-                f"Expected 23 zones, but database contains {zone_count}. "
+                f"Expected {EXPECTED_ZONE_COUNT} zones, "
+                f"but database contains {zone_count}. "
                 "Facilities were not inserted."
             )
 
-        print("Step 2: Inserting facilities...")
-
-        facilities_sql = read_sql_file(FACILITIES_SQL_PATH)
-        connection.executescript(facilities_sql)
+        print("Inserting missing facilities...")
+        connection.executescript(facility_sql)
 
         facility_count = connection.execute(
             "SELECT COUNT(*) FROM facilities"
         ).fetchone()[0]
 
-        invalid_facilities = connection.execute("""
+        orphan_count = connection.execute(
+            """
             SELECT COUNT(*)
-            FROM facilities AS f
-            LEFT JOIN zones AS z ON z.id = f.zone_id
-            WHERE f.zone_id IS NOT NULL
-              AND z.id IS NULL
-        """).fetchone()[0]
+            FROM facilities AS facility
+            LEFT JOIN zones AS zone
+              ON zone.zone_id = facility.zone_id
+            WHERE zone.zone_id IS NULL
+            """
+        ).fetchone()[0]
 
-        if facility_count != 432:
+        foreign_key_errors = connection.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+
+        print("\nFinal validation")
+        print("----------------")
+        print(f"Zones: {zone_count}")
+        print(f"Facilities: {facility_count}")
+        print(f"Orphan facilities: {orphan_count}")
+        print(
+            f"Foreign-key errors: "
+            f"{foreign_key_errors}"
+        )
+
+        print_zone_summary(connection)
+        print_facility_summary(connection)
+
+        if facility_count != EXPECTED_FACILITY_COUNT:
             raise ValueError(
-                f"Expected 432 facilities, but database contains "
+                f"Expected {EXPECTED_FACILITY_COUNT} "
+                f"facilities, but database contains "
                 f"{facility_count}."
             )
 
-        if invalid_facilities != 0:
+        if orphan_count != 0:
             raise ValueError(
-                f"{invalid_facilities} facilities contain invalid zone IDs."
+                f"Found {orphan_count} orphan facilities."
+            )
+
+        if foreign_key_errors:
+            raise ValueError(
+                "SQLite reported foreign-key errors."
             )
 
         connection.commit()
 
-        print("Database seeding completed successfully.")
-        print(f"Zones: {zone_count}/23")
-        print(f"Facilities: {facility_count}/432")
-        print("Invalid facility zone IDs: 0")
-
-    except Exception as error:
-        connection.rollback()
-        print(f"Seeding failed: {error}")
-        raise
-
-    finally:
-        connection.close()
+    print("\nStage 8 completed successfully.")
+    print("The database contains 23 zones and 432 facilities.")
 
 
 if __name__ == "__main__":
