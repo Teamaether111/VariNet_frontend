@@ -1,6 +1,16 @@
 import { LoginCredentials, User, UserRole } from './types';
 
-const AUTH_STORAGE_KEY = 'varinet_session_user';
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  'http://127.0.0.1:8000';
+
+const AUTH_USER_KEY = 'varinet_session_user';
+const AUTH_TOKEN_KEY = 'varinet_access_token';
+
+interface LoginResponse {
+  token: string;
+  user: User;
+}
 
 export const ROLE_CONFIG: Record<
   UserRole,
@@ -42,18 +52,8 @@ export const ROLE_CONFIG: Record<
   },
 };
 
-/**
- * Mock Auth Service
- * Ready for future FastAPI backend integration (e.g. POST /api/v1/auth/login)
- */
 export const authService = {
-  /**
-   * Authenticate user with provided credentials
-   */
   async login(credentials: LoginCredentials): Promise<User> {
-    // Simulate brief network latency for realistic feel
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
     const cleanName = credentials.name?.trim();
     const cleanId = credentials.userId?.trim();
     const cleanPin = credentials.pin?.trim();
@@ -62,74 +62,127 @@ export const authService = {
     if (!cleanName) {
       throw new Error('Please enter your Full Name.');
     }
+
     if (!cleanId) {
-      throw new Error('Please enter your User ID or Badge Number.');
+      throw new Error('Please enter your User ID.');
     }
+
     if (!cleanPin) {
-      throw new Error('Please enter your Password or Security PIN.');
+      throw new Error('Please enter your password.');
     }
-    if (cleanPin.length < 3) {
-      throw new Error('Password or PIN must be at least 3 characters.');
-    }
+
     if (!role || !ROLE_CONFIG[role]) {
-      throw new Error('Please select a valid role before continuing.');
+      throw new Error('Please select a valid role.');
     }
 
-    const user: User = {
-      id: cleanId.toUpperCase(),
-      name: cleanName,
-      role: role,
-    };
+    let response: Response;
 
-    // Store in browser session/local storage for MVP persistence
     try {
-      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+      response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: cleanId,
+          name: cleanName,
+          pin: cleanPin,
+          role,
+        }),
+      });
     } catch {
-      // Ignore storage errors if disabled
+      throw new Error(
+        'Cannot connect to the backend. Please ensure FastAPI is running on port 8000.'
+      );
     }
 
-    return user;
+    const body = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(body?.detail || 'Authentication failed.');
+    }
+
+    const loginResponse = body as LoginResponse;
+
+    if (!loginResponse.token || !loginResponse.user) {
+      throw new Error('Invalid login response received from the backend.');
+    }
+
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(loginResponse.user));
+    localStorage.setItem(AUTH_TOKEN_KEY, loginResponse.token);
+
+    return loginResponse.user;
   },
 
-  /**
-   * Log out the current user session
-   */
   async logout(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    try {
-      localStorage.removeItem(AUTH_STORAGE_KEY);
-    } catch {
-      // Ignore
-    }
+    localStorage.removeItem(AUTH_USER_KEY);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
   },
 
-  /**
-   * Get currently active session user
-   */
   getCurrentUser(): User | null {
     try {
-      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (!stored) return null;
-      const parsed = JSON.parse(stored) as User;
-      if (parsed && parsed.id && parsed.name && parsed.role && ROLE_CONFIG[parsed.role]) {
-        return parsed;
+      const stored = localStorage.getItem(AUTH_USER_KEY);
+
+      if (!stored) {
+        return null;
       }
-      return null;
+
+      const user = JSON.parse(stored) as User;
+
+      if (!user.id || !user.name || !user.role || !ROLE_CONFIG[user.role]) {
+        return null;
+      }
+
+      return user;
     } catch {
       return null;
     }
   },
 
-  /**
-   * Check if active session exists
-   */
-  isAuthenticated(): boolean {
-    return !!this.getCurrentUser();
+  getToken(): string | null {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
   },
 
-  /**
-   * Helper to get route for a given role
-   */
+  getAuthorizationHeaders(): Record<string, string> {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  },
+
+  async validateSession(): Promise<User | null> {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+
+    if (!token) {
+      return null;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        await authService.logout();
+        return null;
+      }
+
+      const user = (await response.json()) as User;
+
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+      return user;
+    } catch {
+      return null;
+    }
+  },
+
+  isAuthenticated(): boolean {
+    return Boolean(
+      localStorage.getItem(AUTH_TOKEN_KEY) && authService.getCurrentUser()
+    );
+  },
+
   getRolePath(role: UserRole): string {
     return ROLE_CONFIG[role]?.path || '/login';
   },

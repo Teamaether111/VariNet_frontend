@@ -11,17 +11,33 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // Initialize from session on startup
   useEffect(() => {
+  let cancelled = false;
+
+  const restoreSession = async () => {
     try {
-      const activeUser = authService.getCurrentUser();
-      if (activeUser) {
+      const activeUser =
+        await authService.validateSession();
+
+      if (!cancelled) {
         setUser(activeUser);
       }
     } catch {
-      // Ignore
+      if (!cancelled) {
+        setUser(null);
+      }
     } finally {
-      setIsLoading(false);
+      if (!cancelled) {
+        setIsLoading(false);
+      }
     }
-  }, []);
+  };
+
+  restoreSession();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
 
   const login = async (credentials: LoginCredentials): Promise<User> => {
     setIsLoading(true);

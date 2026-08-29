@@ -7,28 +7,14 @@ exact API contract defined in src/api/apiService.ts and src/types/index.ts
 import random
 import datetime
 from typing import Optional, List
-from incident_repository import (
-    create_incident as db_create_incident,
-    get_incident_by_id as db_get_incident,
-    list_incidents as db_list_incidents,
-    update_incident as db_update_incident,
-)
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from database import init_db, get_db
-from auth import (
-    router as auth_router,
-    get_current_user,
-    require_roles,
-)
-from facility_repository import (
-    get_facility_by_id,
-    list_facilities,
-)
+from auth import router as auth_router
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -252,19 +238,20 @@ _recommendations: List[dict] = [
         "preventedIncidentEstimate": "1 potential crowd bottleneck",
     }
 ]
+_facilities: List[dict] = []
 _tasks: List[dict] = []
 
 
 class IncidentIn(BaseModel):
     type: str
     title: str
-    description: str = ""
+    description: str
     zoneId: str
     zoneName: str
     priority: str
     reportedBy: str
     reportedRole: str
-    locationDetails: str = ""
+    locationDetails: str
     coordinates: dict
     evidenceUrl: Optional[str] = None
     audioNote: Optional[str] = None
@@ -272,149 +259,51 @@ class IncidentIn(BaseModel):
 
 class IncidentUpdate(BaseModel):
     status: str
-    assignedUnits: Optional[List[str]] = None
+    assigned_unit: Optional[str] = None
+
 
 @app.get("/api/incidents")
-def get_incidents(
-    status: Optional[str] = None,
-    priority: Optional[str] = None,
-    zone_id: Optional[str] = None,
-):
-    return db_list_incidents(
-        status=status,
-        priority=priority,
-        zone_id=zone_id,
-    )
+def get_incidents():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM incidents ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
 
 
-@app.get("/api/incidents/{incident_id}")
-def get_incident(incident_id: str):
-    incident = db_get_incident(incident_id)
-
-    if incident is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Incident not found",
-        )
-
-    return incident
-
-
-@app.post("/api/incidents", status_code=201)
-def create_incident_endpoint(
-    incident: IncidentIn,
-    current_user: dict = Depends(get_current_user),
-):
-    valid_priorities = {
-        "LOW",
-        "MEDIUM",
-        "HIGH",
-        "CRITICAL",
-    }
-
-    valid_reported_roles = {
-        "AI_DETECTION",
-        "VOLUNTEER",
-        "PILGRIM",
-        "POLICE",
-    }
-
-    if incident.priority.upper() not in valid_priorities:
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid incident priority",
-        )
-
-    if incident.reportedRole.upper() not in valid_reported_roles:
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid reported role",
-        )
-
-    payload = incident.model_dump()
-
-    role_mapping = {
-        "pilgrim": "PILGRIM",
-        "volunteer": "VOLUNTEER",
-        "police": "POLICE",
-        "temple-authority": "POLICE",
-    }
-
-    payload["reportedBy"] = current_user["sub"]
-    payload["reportedRole"] = role_mapping[current_user["role"]]
-    payload["priority"] = payload["priority"].upper()
-
-    return db_create_incident(payload)
+@app.post("/api/incidents")
+def create_incident(incident: IncidentIn):
+    new_id = f"inc-{random.randint(1000, 9999)}"
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO incidents (id, type, title, description, zone_id, zone_name,
+                priority, status, reported_by, reported_role, location_details,
+                coord_x, coord_y, evidence_url, audio_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?, ?)
+        """, (new_id, incident.type, incident.title, incident.description,
+              incident.zoneId, incident.zoneName, incident.priority,
+              incident.reportedBy, incident.reportedRole, incident.locationDetails,
+              incident.coordinates.get("x"), incident.coordinates.get("y"),
+              incident.evidenceUrl, incident.audioNote))
+        conn.commit()
+        row = conn.execute("SELECT * FROM incidents WHERE id = ?", (new_id,)).fetchone()
+    return dict(row)
 
 
 @app.patch("/api/incidents/{incident_id}")
-def update_incident_endpoint(
-    incident_id: str,
-    update: IncidentUpdate,
-    current_user: dict = Depends(
-        require_roles(
-            "police",
-            "temple-authority",
-        )
-    ),
-):
-    existing_incident = db_get_incident(incident_id)
+def update_incident(incident_id: str, update: IncidentUpdate):
+    with get_db() as conn:
+        existing = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if not existing:
+            conn.execute("INSERT INTO incidents (id, status) VALUES (?, ?)", (incident_id, update.status))
+        else:
+            conn.execute("UPDATE incidents SET status = ? WHERE id = ?", (update.status, incident_id))
+        conn.commit()
+        row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+    return dict(row)
 
-    if existing_incident is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Incident not found",
-        )
-
-    return db_update_incident(
-        incident_id,
-        update.model_dump(exclude_none=True),
-    )
 
 @app.get("/api/facilities")
-def get_facilities(
-    zone_id: Optional[str] = Query(
-        default=None,
-        description="Filter by zone ID, such as Z011",
-    ),
-    facility_type: Optional[str] = Query(
-        default=None,
-        description=(
-            "Filter using MEDICAL, WATER, TOILET, "
-            "POLICE_BOOTH, SHELTER, PARKING or PRASAD_CAMP"
-        ),
-    ),
-    status: Optional[str] = Query(
-        default=None,
-        description="Filter using OPEN, BUSY, FULL or MAINTENANCE",
-    ),
-    limit: int = Query(
-        default=500,
-        ge=1,
-        le=500,
-    ),
-):
-    return list_facilities(
-        zone_id=zone_id,
-        facility_type=facility_type,
-        status=status,
-        limit=limit,
-    )
-
-
-@app.get("/api/facilities/{facility_id}")
-def get_facility(facility_id: str):
-    facility = get_facility_by_id(
-        facility_id.strip().upper()
-    )
-
-    if facility is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Facility not found",
-        )
-
-    return facility
+def get_facilities():
+    return _facilities
 
 
 @app.get("/api/recommendations/next")
@@ -425,63 +314,26 @@ def get_next_recommendation():
 
 
 @app.post("/api/recommendations/{rec_id}/approve")
-def approve_recommendation(
-    rec_id: str,
-    approverName: str = "SP / District Collector",
-    current_user: dict = Depends(
-        require_roles(
-            "police",
-            "temple-authority",
-        )
-    ),
-):
-    rec = next(
-        (
-            recommendation
-            for recommendation in _recommendations
-            if recommendation["id"] == rec_id
-        ),
-        None,
-    )
-
+def approve_recommendation(rec_id: str, approverName: str = "SP / District Collector"):
+    rec = next((r for r in _recommendations if r["id"] == rec_id), None)
     if not rec:
-        raise HTTPException(
-            status_code=404,
-            detail="Recommendation not found",
-        )
-
+        raise HTTPException(status_code=404, detail="Recommendation not found")
     rec["status"] = "APPROVED"
     rec["approvedBy"] = approverName
     rec["approvedAt"] = datetime.datetime.now().strftime("%H:%M:%S")
-
     return rec
 
 
 @app.post("/api/tasks/{task_id}/complete")
-def complete_task(
-    task_id: str,
-    evidenceNotes: Optional[str] = None,
-    evidencePhoto: Optional[str] = None,
-    current_user: dict = Depends(
-        require_roles("volunteer")
-    ),
-):
-    task = next(
-        (item for item in _tasks if item["id"] == task_id),
-        None,
-    )
-
+def complete_task(task_id: str, evidenceNotes: Optional[str] = None, evidencePhoto: Optional[str] = None):
+    task = next((t for t in _tasks if t["id"] == task_id), None)
     if not task:
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found",
-        )
-
+        raise HTTPException(status_code=404, detail="Task not found")
     task["status"] = "COMPLETED"
     task["evidenceNotes"] = evidenceNotes
     task["evidencePhoto"] = evidencePhoto
-
     return task
+
 
 @app.get("/api/dashboard/summary")
 def dashboard_summary():

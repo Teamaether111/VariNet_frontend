@@ -4,3 +4,12 @@ joblib
 pandas
 scikit-learn
 pydantic
+fastapi
+uvicorn[standard]
+joblib
+pandas
+scikit-learn==1.8.0
+pydantic
+bcrypt
+PyJWT
+python-dotenv

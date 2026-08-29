@@ -5,14 +5,18 @@ Handles registration, login, password hashing (bcrypt), and JWT tokens.
 
 import datetime
 from typing import Optional
+import os
+from pathlib import Path
+from dotenv import load_dotenv
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
-
 from database import get_db
 
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
@@ -23,9 +27,16 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
-SECRET_KEY = "vari-net-hackathon-secret-change-in-production"  # move to env var for real deployment
+SECRET_KEY = os.getenv(
+    "JWT_SECRET_KEY",
+    "development-only-change-this-secret",
+)
+
 ALGORITHM = "HS256"
-TOKEN_EXPIRE_HOURS = 24
+
+TOKEN_EXPIRE_HOURS = int(
+    os.getenv("JWT_EXPIRE_HOURS", "24")
+)
 
 VALID_ROLES = {"pilgrim", "volunteer", "police", "temple-authority"}
 
@@ -44,13 +55,28 @@ class LoginIn(BaseModel):
     role: str
 
 
-def create_token(user_id: str, role: str) -> str:
+def create_token(
+    user_id: str,
+    role: str,
+) -> str:
+    now = datetime.datetime.now(
+        datetime.timezone.utc
+    )
+
     payload = {
         "sub": user_id,
         "role": role,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=TOKEN_EXPIRE_HOURS),
+        "iat": now,
+        "exp": now + datetime.timedelta(
+            hours=TOKEN_EXPIRE_HOURS
+        ),
     }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+    return jwt.encode(
+        payload,
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
 
 
 def decode_token(token: str) -> dict:
@@ -70,7 +96,30 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     return decode_token(token)
 
 
-@router.post("/register")
+@router.post("/auth/login")
+
+def require_roles(*allowed_roles: str):
+    """
+    Returns a FastAPI dependency that permits only users
+    whose JWT role is in allowed_roles.
+    """
+
+    def role_guard(
+        current_user: dict = Depends(get_current_user),
+    ):
+        user_role = current_user.get("role")
+
+        if user_role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action.",
+            )
+
+        return current_user
+
+    return role_guard
+
+
 def register(payload: RegisterIn):
     if payload.role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
