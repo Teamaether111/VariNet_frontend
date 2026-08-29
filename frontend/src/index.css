@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    /* Global base font size reset to standard, readable 16px (1rem) */
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: #F9F8F6;
+    color: #1A2B47;
+    font-size: 1rem; /* 16px base */
+    min-height: 100vh;
+    line-height: 1.6; /* Ample breathing room for Devanagari Hindi/Marathi matras and ascenders/descenders */
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Ensure Marathi and Hindi text rendering preserves full vowel sign heights without vertical clipping */
+  :lang(mr), :lang(hi), [lang="mr"], [lang="hi"] {
+    line-height: 1.65;
+    letter-spacing: 0.01em;
+  }
+
+  /* Senior-friendly input, button, and touch target standards */
+  input, select, textarea, button {
+    font-family: inherit;
+    line-height: 1.5;
+  }
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.animate-dash {
+  animation: dash 1.5s linear infinite;
+}
