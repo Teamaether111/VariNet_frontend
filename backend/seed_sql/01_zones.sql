@@ -1,0 +1,40 @@
+INSERT INTO zones (
+    id,
+    name,
+    description,
+    capacity,
+    latitude,
+    longitude,
+    status
+)
+VALUES
+('ZONE-001', 'Temple Entrance', 'Main Shri Vitthal-Rukmini Temple entrance', 5000, 17.67750, 75.32830, 'ACTIVE'),
+('ZONE-002', 'Temple Exit', 'Primary temple exit and dispersal area', 4500, 17.67780, 75.32870, 'ACTIVE'),
+('ZONE-003', 'Darshan Queue A', 'First temple darshan queue enclosure', 3500, 17.67810, 75.32810, 'ACTIVE'),
+('ZONE-004', 'Darshan Queue B', 'Second temple darshan queue enclosure', 3500, 17.67840, 75.32780, 'ACTIVE'),
+('ZONE-005', 'Darshan Queue C', 'Third temple darshan queue enclosure', 3500, 17.67870, 75.32750, 'ACTIVE'),
+('ZONE-006', 'Chandrabhaga Ghat North', 'Northern riverbank and bathing area', 6000, 17.67480, 75.32600, 'ACTIVE'),
+('ZONE-007', 'Chandrabhaga Ghat Central', 'Central riverbank and bathing area', 7000, 17.67390, 75.32680, 'ACTIVE'),
+('ZONE-008', 'Chandrabhaga Ghat South', 'Southern riverbank and bathing area', 6000, 17.67290, 75.32740, 'ACTIVE'),
+('ZONE-009', 'Wakhari Entry', 'Major pilgrim entry and convergence zone', 10000, 17.72890, 75.25860, 'ACTIVE'),
+('ZONE-010', 'Wakhari Camp', 'Pilgrim accommodation and rest camp', 8000, 17.72680, 75.26120, 'ACTIVE'),
+('ZONE-011', 'Palkhi Route North', 'Northern section of the Palkhi route', 7500, 17.70080, 75.29150, 'ACTIVE'),
+('ZONE-012', 'Palkhi Route Central', 'Central section of the Palkhi route', 7500, 17.69060, 75.30620, 'ACTIVE'),
+('ZONE-013', 'Palkhi Route South', 'Final Palkhi approach toward Pandharpur', 7500, 17.68270, 75.31940, 'ACTIVE'),
+('ZONE-014', 'Central Bus Stand', 'Bus arrival, departure and passenger holding area', 5000, 17.68120, 75.31980, 'ACTIVE'),
+('ZONE-015', 'Railway Station', 'Railway arrival and passenger dispersal area', 4500, 17.67560, 75.31590, 'ACTIVE'),
+('ZONE-016', 'Parking Zone North', 'Northern vehicle parking and shuttle point', 4000, 17.69250, 75.32120, 'ACTIVE'),
+('ZONE-017', 'Parking Zone South', 'Southern vehicle parking and shuttle point', 4000, 17.66380, 75.32980, 'ACTIVE'),
+('ZONE-018', 'Medical Response Zone', 'Main emergency medical coordination area', 2500, 17.68030, 75.32540, 'ACTIVE'),
+('ZONE-019', 'Police Control Zone', 'Police and crowd-control coordination area', 2500, 17.67940, 75.32470, 'ACTIVE'),
+('ZONE-020', 'Food Distribution Zone', 'Mahaprasad and food-distribution area', 5000, 17.68450, 75.33120, 'ACTIVE'),
+('ZONE-021', 'Sanitation Service Zone', 'Sanitation operations and public convenience area', 3000, 17.68610, 75.32310, 'ACTIVE'),
+('ZONE-022', 'Pilgrim Shelter Zone', 'Temporary shelter and rest area', 6000, 17.68920, 75.31780, 'ACTIVE'),
+('ZONE-023', 'Emergency Evacuation Zone', 'Emergency assembly and evacuation area', 8000, 17.69550, 75.31280, 'ACTIVE')
+ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    description = excluded.description,
+    capacity = excluded.capacity,
+    latitude = excluded.latitude,
+    longitude = excluded.longitude,
+    status = excluded.status;
