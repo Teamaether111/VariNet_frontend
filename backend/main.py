@@ -10,11 +10,15 @@ from typing import Optional, List
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from database import init_db, get_db
 from auth import router as auth_router
+from facility_repository import (
+    get_facility_by_id,
+    list_facilities,
+)
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -238,7 +242,6 @@ _recommendations: List[dict] = [
         "preventedIncidentEstimate": "1 potential crowd bottleneck",
     }
 ]
-_facilities: List[dict] = []
 _tasks: List[dict] = []
 
 
@@ -302,8 +305,49 @@ def update_incident(incident_id: str, update: IncidentUpdate):
 
 
 @app.get("/api/facilities")
-def get_facilities():
-    return _facilities
+def get_facilities(
+    zone_id: Optional[str] = Query(
+        default=None,
+        description="Filter by zone ID, such as Z011",
+    ),
+    facility_type: Optional[str] = Query(
+        default=None,
+        description=(
+            "Filter using MEDICAL, WATER, TOILET, "
+            "POLICE_BOOTH, SHELTER, PARKING or PRASAD_CAMP"
+        ),
+    ),
+    status: Optional[str] = Query(
+        default=None,
+        description="Filter using OPEN, BUSY, FULL or MAINTENANCE",
+    ),
+    limit: int = Query(
+        default=500,
+        ge=1,
+        le=500,
+    ),
+):
+    return list_facilities(
+        zone_id=zone_id,
+        facility_type=facility_type,
+        status=status,
+        limit=limit,
+    )
+
+
+@app.get("/api/facilities/{facility_id}")
+def get_facility(facility_id: str):
+    facility = get_facility_by_id(
+        facility_id.strip().upper()
+    )
+
+    if facility is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Facility not found",
+        )
+
+    return facility
 
 
 @app.get("/api/recommendations/next")
