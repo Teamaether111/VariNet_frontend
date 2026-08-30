@@ -11,8 +11,6 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "varinet.db"
 
-DB_PATH = "varinet.db"
-
 def init_db():
     with get_db() as conn:
         conn.execute("""

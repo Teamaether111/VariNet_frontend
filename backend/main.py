@@ -26,11 +26,16 @@ from repositories.incident_repository import (
     list_incidents as db_list_incidents,
     update_incident as db_update_incident,
 )
+from routers.temple_queue import router as temple_queue_router
+
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
 
+
 app = FastAPI(title="VARI-Net Backend")
+app.include_router(temple_queue_router, prefix="/api")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -554,7 +559,6 @@ def execute_reroute(route_id: str):
 
     route["status"] = "ACTIVE"
     return route
-
 
 @app.get("/")
 def root():

@@ -1,3 +1,5 @@
+import { authService } from "./authService";
+
 import {
   Zone,
   Incident,
@@ -5,6 +7,11 @@ import {
   Facility,
   VolunteerTask,
 } from '../types';
+
+import type {
+  TempleQueuePredictionInput,
+  TempleQueuePredictionResult,
+} from "../types";
 
 import {
   INITIAL_ZONES,
@@ -94,35 +101,15 @@ class ApiService {
     const response = await fetch(`${API_BASE_URL}/api/incidents`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-      },
+  "Content-Type": "application/json",
+  ...authService.getAuthorizationHeaders(),
+},
       body: JSON.stringify(incidentData),
     });
 
     return parseApiResponse<Incident>(response);
   }
 
-  // PATCH /api/incidents/{incidentId}
-  async updateIncident(
-    incidentId: string,
-    update: {
-      status: Incident['status'];
-      assignedUnits?: string[];
-    }
-  ): Promise<Incident> {
-    const response = await fetch(
-      `${API_BASE_URL}/api/incidents/${incidentId}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(update),
-      }
-    );
-
-    return parseApiResponse<Incident>(response);
-  }
 
   // GET /api/recommendations/next
   async getNextRecommendation(): Promise<AIRecommendation | null> {
@@ -158,6 +145,23 @@ class ApiService {
 
     return JSON.parse(JSON.stringify(recommendation));
   }
+
+  async predictTempleQueue(
+  input: TempleQueuePredictionInput,
+): Promise<TempleQueuePredictionResult> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/temple-queue/predict`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+
+  return parseApiResponse<TempleQueuePredictionResult>(response);
+}
 
   // POST /api/tasks/{id}/complete
   async completeTask(
@@ -201,6 +205,8 @@ async updateIncident(
 
   return parseApiResponse<Incident>(response);
 }
+
+
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));

@@ -1,62 +1,85 @@
-import {
-  Zone,
-  Incident,
-  AIRecommendation,
-  Facility,
-  VolunteerTask,
-} from '../types';
-import {
-  INITIAL_ZONES,
-  INITIAL_INCIDENTS,
-  INITIAL_RECOMMENDATIONS,
-} from '../data/initialData';
-import { generateUniqueId } from '../utils/idGenerator';
 import { authService } from '../features/auth/authService';
 
+import type {
+  AIRecommendation,
+  Facility,
+  Incident,
+  TempleQueuePredictionInput,
+  TempleQueuePredictionResult,
+  VolunteerTask,
+  Zone,
+} from '../types';
+
+import {
+  INITIAL_FACILITIES,
+  INITIAL_RECOMMENDATIONS,
+  INITIAL_ZONES,
+} from '../data/initialData';
+
+
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ||
-  'http://127.0.0.1:8000';
+  import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
 
-async function parseApiResponse<T>(
-  response: Response
-): Promise<T> {
-  if (!response.ok) {
-    let message = `API request failed: ${response.status}`;
+export type QueueAlertStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'RESOLVED';
 
-    try {
-      const errorBody = await response.json();
-
-      if (errorBody?.detail) {
-        message = errorBody.detail;
-      }
-    } catch {
-      // Keep default message if backend does not return JSON.
-    }
-
-    throw new Error(message);
-  }
-
-  return response.json() as Promise<T>;
+export interface QueueAlert {
+  alert_id: number;
+  prediction_id: number;
+  zone_id: string;
+  alert_level: 'MODERATE' | 'HIGH' | 'CRITICAL';
+  title: string;
+  message: string;
+  explanation: string;
+  recommended_action: string;
+  status: QueueAlertStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  predicted_wait_minutes?: number;
+  prediction_date?: string;
+  hour?: number;
+  location?: string;
+  waiting_people?: number;
+  gates_open?: number;
+  crowd_density?: number;
 }
+
+export interface QueueAlertListResponse {
+  count: number;
+  items: QueueAlert[];
+}
+
+
+async function parseApiResponse<T>(response: Response): Promise<T> {
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      data?.detail ??
+        data?.message ??
+        `Request failed with status ${response.status}`,
+    );
+  }
+  return data as T;
+}
+
 
 class ApiService {
   private zones: Zone[] = [...INITIAL_ZONES];
-
-  private incidents: Incident[] = [
-    ...INITIAL_INCIDENTS,
-  ];
-
+  private facilities: Facility[] = [...INITIAL_FACILITIES];
   private recommendations: AIRecommendation[] = [
     ...INITIAL_RECOMMENDATIONS,
   ];
-
   private tasks: VolunteerTask[] = [
     {
       id: 'task-101',
       volunteerId: 'VOL-402',
       title: 'Distribute ORS Sachets & Water at Pillar 14',
       instruction:
-        'Setup hydration outpost opposite Dnyaneshwar Hall. Assist 3 dehydrated senior pilgrims.',
+        'Setup hydration outpost opposite Dnyaneshwar Hall. Assist dehydrated senior pilgrims.',
       zoneId: 'sector-c',
       zoneName: 'Sector C (Palkhi Marg)',
       priority: 'HIGH',
@@ -68,7 +91,7 @@ class ApiService {
       volunteerId: 'VOL-402',
       title: 'Verify Namdev Gate Barricade Clearance',
       instruction:
-        'Coordinate with Temple Police to remove temporary vendor encroachment on East Gate steps.',
+        'Coordinate with Temple Police to clear the East Gate steps.',
       zoneId: 'sector-b',
       zoneName: 'Sector B (Temple Quad)',
       priority: 'MEDIUM',
@@ -77,93 +100,41 @@ class ApiService {
     },
   ];
 
-  // GET /api/zones/risk — public for now
   async getZonesRisk(): Promise<Zone[]> {
     await this.delay(80);
-    return JSON.parse(JSON.stringify(this.zones));
+    return JSON.parse(JSON.stringify(this.zones)) as Zone[];
   }
 
-  // GET /api/incidents — public for now
   async getIncidents(): Promise<Incident[]> {
+    const response = await fetch(`${API_BASE_URL}/api/incidents`);
+    return parseApiResponse<Incident[]>(response);
+  }
+
+  async getFacilities(): Promise<Facility[]> {
     await this.delay(80);
-    return JSON.parse(JSON.stringify(this.incidents));
+    return JSON.parse(JSON.stringify(this.facilities)) as Facility[];
   }
 
-  // GET /api/facilities — public
-  async getFacilities(filters?: {
-    zoneId?: string;
-    facilityType?: Facility['type'];
-    status?: Facility['status'];
-  }): Promise<Facility[]> {
-    const query = new URLSearchParams();
-
-    if (filters?.zoneId) {
-      query.set('zone_id', filters.zoneId);
-    }
-
-    if (filters?.facilityType) {
-      query.set('facility_type', filters.facilityType);
-    }
-
-    if (filters?.status) {
-      query.set('status', filters.status);
-    }
-
-    const queryString = query.toString();
-
-    const url = queryString
-      ? `${API_BASE_URL}/api/facilities?${queryString}`
-      : `${API_BASE_URL}/api/facilities`;
-
-    const response = await fetch(url);
-
-    return parseApiResponse<Facility[]>(response);
-  }
-
-  // GET /api/recommendations/next — public for now
-  async getNextRecommendation(): Promise<AIRecommendation | null> {
-    await this.delay(80);
-
-    const active = this.recommendations.find(
-      (recommendation) =>
-        recommendation.status === 'PENDING_APPROVAL' ||
-        recommendation.status === 'APPROVED'
-    );
-
-    return active
-      ? JSON.parse(JSON.stringify(active))
-      : null;
-  }
-
-  // POST /api/incidents — protected
   async createIncident(
-    incidentData: Omit<
-      Incident,
-      'id' | 'timestamp' | 'status'
-    >
+    incidentData: Omit<Incident, 'id' | 'timestamp' | 'status'>,
   ): Promise<Incident> {
-    const response = await fetch(
-      `${API_BASE_URL}/api/incidents`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authService.getAuthorizationHeaders(),
-        },
-        body: JSON.stringify(incidentData),
-      }
-    );
-
+    const response = await fetch(`${API_BASE_URL}/api/incidents`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authService.getAuthorizationHeaders(),
+      },
+      body: JSON.stringify(incidentData),
+    });
     return parseApiResponse<Incident>(response);
   }
 
-  // PATCH /api/incidents/{id} — protected
   async updateIncident(
     incidentId: string,
     update: {
       status: Incident['status'];
       assignedUnits?: string[];
-    }
+    },
   ): Promise<Incident> {
     const response = await fetch(
       `${API_BASE_URL}/api/incidents/${incidentId}`,
@@ -174,60 +145,115 @@ class ApiService {
           ...authService.getAuthorizationHeaders(),
         },
         body: JSON.stringify(update),
-      }
+      },
     );
-
     return parseApiResponse<Incident>(response);
   }
 
-  // POST /api/recommendations/{id}/approve — protected
-  async approveRecommendation(
-    id: string,
-    approverName = 'SP / District Collector'
-  ): Promise<AIRecommendation> {
-    const response = await fetch(
-      `${API_BASE_URL}/api/recommendations/${id}/approve`,
-      {
-        method: 'POST',
-        headers: {
-          ...authService.getAuthorizationHeaders(),
-        },
-        body: JSON.stringify({
-          approverName,
-        }),
-      }
+  async getNextRecommendation(): Promise<AIRecommendation | null> {
+    await this.delay(80);
+    const active = this.recommendations.find(
+      recommendation =>
+        recommendation.status === 'PENDING_APPROVAL' ||
+        recommendation.status === 'APPROVED',
     );
-
-    return parseApiResponse<AIRecommendation>(response);
+    return active
+      ? (JSON.parse(JSON.stringify(active)) as AIRecommendation)
+      : null;
   }
 
-  // POST /api/tasks/{id}/complete — protected
-  async completeTask(
-    taskId: string,
-    evidenceNotes?: string,
-    evidencePhoto?: string
-  ): Promise<VolunteerTask> {
+  async approveRecommendation(
+    id: string,
+    approverName = 'SP / District Collector',
+  ): Promise<AIRecommendation> {
+    await this.delay(200);
+    const recommendation = this.recommendations.find(item => item.id === id);
+    if (!recommendation) {
+      throw new Error(`Recommendation ${id} not found`);
+    }
+    recommendation.status = 'APPROVED';
+    recommendation.approvedBy = approverName;
+    recommendation.approvedAt = new Date().toLocaleTimeString();
+    return JSON.parse(JSON.stringify(recommendation)) as AIRecommendation;
+  }
+
+  async predictTempleQueue(
+    input: TempleQueuePredictionInput,
+  ): Promise<TempleQueuePredictionResult> {
     const response = await fetch(
-      `${API_BASE_URL}/api/tasks/${taskId}/complete`,
+      `${API_BASE_URL}/api/temple-queue/predict`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...authService.getAuthorizationHeaders(),
         },
-        body: JSON.stringify({
-          evidenceNotes,
-          evidencePhoto,
-        }),
-      }
+        body: JSON.stringify(input),
+      },
     );
-
-    return parseApiResponse<VolunteerTask>(response);
+    return parseApiResponse<TempleQueuePredictionResult>(response);
   }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  async getTempleQueueAlerts(
+    status?: QueueAlertStatus | 'ALL',
+    zoneId?: string,
+    limit = 50,
+  ): Promise<QueueAlertListResponse> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (status && status !== 'ALL') {
+      query.set('status', status);
+    }
+    if (zoneId?.trim()) {
+      query.set('zone_id', zoneId.trim());
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/temple-queue/alerts?${query.toString()}`,
+      {
+        headers: authService.getAuthorizationHeaders(),
+      },
+    );
+    return parseApiResponse<QueueAlertListResponse>(response);
+  }
+
+  async reviewTempleQueueAlert(
+    alertId: number,
+    status: Exclude<QueueAlertStatus, 'PENDING'>,
+  ): Promise<QueueAlert> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/temple-queue/alerts/${alertId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authService.getAuthorizationHeaders(),
+        },
+        body: JSON.stringify({ status }),
+      },
+    );
+    return parseApiResponse<QueueAlert>(response);
+  }
+
+  async completeTask(
+    taskId: string,
+    evidenceNotes?: string,
+    evidencePhoto?: string,
+  ): Promise<VolunteerTask> {
+    await this.delay(150);
+    const task = this.tasks.find(item => item.id === taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+    task.status = 'COMPLETED';
+    task.evidenceNotes = evidenceNotes;
+    task.evidencePhoto = evidencePhoto;
+    return JSON.parse(JSON.stringify(task)) as VolunteerTask;
+  }
+
+  private delay(milliseconds: number): Promise<void> {
+    return new Promise(resolve => window.setTimeout(resolve, milliseconds));
   }
 }
+
 
 export const apiService = new ApiService();

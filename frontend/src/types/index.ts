@@ -1,3 +1,29 @@
+export interface TempleQueuePredictionInput {
+  date: string;
+  hour: number;
+  waiting_people: number;
+  gates_open: number;
+  crowd_count: number;
+  crowd_density: number;
+  zone_id: string;
+  location: string;
+  route_type: string;
+  darshan_status: string;
+  is_peak_day: boolean;
+}
+
+export interface TempleQueuePredictionResult {
+  prediction_id: number;
+  predicted_wait_minutes: number;
+  predicted_wait_label:
+    | "LOW"
+    | "MODERATE"
+    | "HIGH"
+    | "CRITICAL";
+  day_of_week: number;
+  created_at: string;
+}
+
 export type UserRole =
   | 'pilgrim'
   | 'volunteer'
@@ -188,7 +214,7 @@ export interface TempleQueueStatus {
     name: string;
     currentOccupancy: number;
     maxCapacity: number;
-    status: 'NORMAL' | 'FILLING' | 'CRITICAL';
+    status: 'NORMAL' | 'FILLING' | 'FULL' | 'CRITICAL';
   }>;
   vipGateStatus: 'FLOWING' | 'RESTRICTED' | 'PAUSED';
   annachhatraMealsServedToday: number;
